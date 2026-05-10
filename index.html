@@ -907,7 +907,8 @@ function renderLoginScreen(){
       <div class="student-login-logo">📚</div>
       <div class="student-login-title">나의 독서록</div>
       <div class="student-login-sub">처음 오셨군요! 비밀번호를 설정해 주세요.</div>
-      <input type="text" id="loginName" placeholder="이름 (예: 3학년 1반 김철수)" oninput="" autocomplete="off">
+      <input type="text" id="loginName" placeholder="이름 (예: 3학년 1반 김철수)" autocomplete="off">
+      <input type="text" id="loginUrl" placeholder="선생님께 받은 Google Script URL" autocomplete="off" style="font-size:.82rem;">
       <input type="password" id="loginPw1" placeholder="비밀번호 설정 (4자 이상)" autocomplete="new-password">
       <input type="password" id="loginPw2" placeholder="비밀번호 확인" onkeydown="if(event.key==='Enter')doFirstSetup()">
       <div class="student-login-err" id="loginErr"></div>
@@ -930,14 +931,16 @@ function renderLoginScreen(){
 
 function doFirstSetup(){
   const name=document.getElementById('loginName').value.trim();
+  const url=document.getElementById('loginUrl').value.trim();
   const pw1=document.getElementById('loginPw1').value;
   const pw2=document.getElementById('loginPw2').value;
   const err=document.getElementById('loginErr');
   if(!name){err.textContent='이름을 입력해 주세요.';return;}
+  if(!url){err.textContent='선생님께 받은 URL을 입력해 주세요.';return;}
   if(pw1.length<4){err.textContent='비밀번호는 4자 이상이어야 합니다.';return;}
   if(pw1!==pw2){err.textContent='비밀번호가 일치하지 않습니다.';return;}
-  // 이름 저장 및 비밀번호 설정
   state.student=name;
+  state.scriptURL=url;
   setStoredPw(pw1);
   save();
   hideLogin();
