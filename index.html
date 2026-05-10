@@ -237,6 +237,7 @@ textarea{resize:vertical;min-height:240px;line-height:1.8;width:100%;}
 .student-login-btn.secondary{background:var(--amber-light);color:var(--navy);border:1.5px solid var(--amber);}
 .student-login-btn.secondary:hover{background:var(--amber);color:#fff;}
 .student-login-hint{font-size:.75rem;color:var(--muted);margin-top:8px;}
+.watermark{position:fixed;bottom:12px;right:16px;font-size:.72rem;
   color:rgba(100,90,70,.45);pointer-events:none;z-index:999;letter-spacing:.5px;}
 .tab-panel{display:none;}
 .tab-panel.active{display:block;}
@@ -883,6 +884,20 @@ function getTierSVG(name,size=64){
 const STAR_LABELS=['','⭐ 별로였어요','⭐⭐ 그럭저럭','⭐⭐⭐ 괜찮았어요','⭐⭐⭐⭐ 좋았어요','⭐⭐⭐⭐⭐ 최고였어요!'];
 
 // ══ INIT ══
+// ══ JSONP ══
+function jsonpFetch(url){
+  return new Promise((resolve,reject)=>{
+    const cb='_cb'+Date.now()+'_'+Math.random().toString(36).slice(2);
+    const script=document.createElement('script');
+    const timer=setTimeout(()=>{cleanup();reject(new Error('timeout'));},15000);
+    function cleanup(){clearTimeout(timer);delete window[cb];if(script.parentNode)script.parentNode.removeChild(script);}
+    window[cb]=function(data){cleanup();resolve(data);};
+    script.src=url+(url.includes('?')?'&':'?')+'callback='+cb;
+    script.onerror=()=>{cleanup();reject(new Error('network error'));};
+    document.head.appendChild(script);
+  });
+}
+
 // ══ 학생 로그인 ══
 const PW_KEY = 'readingLog_pw';
 
@@ -929,7 +944,7 @@ function renderLoginScreen(){
   wrap.style.display='flex';
 }
 
-function doFirstSetup(){
+async function doFirstSetup(){
   const name=document.getElementById('loginName').value.trim();
   const url=document.getElementById('loginUrl').value.trim();
   const pw1=document.getElementById('loginPw1').value;
@@ -939,6 +954,19 @@ function doFirstSetup(){
   if(!url){err.textContent='선생님께 받은 URL을 입력해 주세요.';return;}
   if(pw1.length<4){err.textContent='비밀번호는 4자 이상이어야 합니다.';return;}
   if(pw1!==pw2){err.textContent='비밀번호가 일치하지 않습니다.';return;}
+
+  // 명단 검증
+  err.textContent='명단 확인 중...';
+  try{
+    const roster=await jsonpFetch(url+'?mode=getStudentList');
+    if(Array.isArray(roster)&&roster.length>0){
+      if(!roster.includes(name)){
+        err.textContent='❌ 명단에 없는 이름입니다. 선생님이 등록한 이름을 정확히 입력해 주세요.';
+        return;
+      }
+    }
+  }catch(e){/* 네트워크 오류 시 통과 */}
+
   state.student=name;
   state.scriptURL=url;
   setStoredPw(pw1);
