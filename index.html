@@ -170,7 +170,7 @@ textarea{resize:vertical;min-height:240px;line-height:1.8;width:100%;}
   background:linear-gradient(135deg,var(--navy) 0%,#2d4a7a 100%);color:#fff;position:relative;overflow:hidden;}
 .summary-card-inner::before{content:'📚';position:absolute;top:-20px;right:-10px;
   font-size:100px;opacity:.07;transform:rotate(-20deg);}
-.sc-photo{width:100%;max-height:140px;object-fit:cover;border-radius:8px;margin-bottom:14px;}
+.sc-photo{width:100%;height:160px;object-fit:cover;border-radius:10px;margin-bottom:14px;display:block;}
 .sc-book-title{font-family:'Nanum Myeongjo',serif;font-size:1.35rem;font-weight:800;margin-bottom:4px;}
 .sc-author{font-size:.85rem;opacity:.75;margin-bottom:14px;}
 .sc-stars{font-size:1.4rem;letter-spacing:4px;margin-bottom:10px;}
@@ -1545,10 +1545,21 @@ function drawSummary(ctx,log,W,y0){
   return y;
 }
 
+// 사진을 구역에 비율 유지하며 채움 (object-fit: cover)
+function drawImageCover(ctx, img, dx, dy, dw, dh){
+  const iw=img.naturalWidth||img.width;
+  const ih=img.naturalHeight||img.height;
+  if(!iw||!ih){ctx.drawImage(img,dx,dy,dw,dh);return;}
+  const scale=Math.max(dw/iw, dh/ih);
+  const sw=dw/scale, sh=dh/scale;
+  const sx=(iw-sw)/2, sy=(ih-sh)/2;
+  ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
 function downloadSummaryCard(){
   const log=currentModalLog;if(!log)return;
   const c=document.getElementById('exportCanvas');
-  const W=600,H=log.image?500:360;
+  const W=600, PHOTO_H=180, H=log.image?50+PHOTO_H+300:380;
   c.width=W;c.height=H;
   const ctx=c.getContext('2d');
   const g=ctx.createLinearGradient(0,0,W,H);
@@ -1556,21 +1567,30 @@ function downloadSummaryCard(){
   ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
   ctx.save();ctx.globalAlpha=.06;ctx.font='140px serif';ctx.fillStyle='#fff';ctx.fillText('📚',W-160,160);ctx.restore();
 
-  const finalize=(y)=>{
-    ctx.fillStyle='rgba(255,255,255,.2)';ctx.font='11px sans-serif';ctx.fillText('made by 박선생',W-102,H-12);
+  const finalize=()=>{
+    ctx.fillStyle='rgba(255,255,255,.2)';ctx.font='11px sans-serif';
+    ctx.textAlign='right';ctx.fillText('made by 박선생',W-16,H-12);ctx.textAlign='left';
     dlCanvas(c,'요약카드_'+log.title+'.png');
   };
+
+  const drawContent=(topY)=>{drawSummary(ctx,log,W,topY);finalize();};
 
   if(log.image){
     const img=new Image();
     img.onload=()=>{
-      ctx.save();rrect(ctx,40,24,W-80,150,8);ctx.clip();
-      ctx.drawImage(img,40,24,W-80,150);ctx.restore();
-      drawSummary(ctx,log,W,190);finalize();
+      // 사진 구역: 고정 높이 PHOTO_H, 좌우 여백 40
+      const px=40, py=24, pw=W-80, ph=PHOTO_H;
+      ctx.save();rrect(ctx,px,py,pw,ph,10);ctx.clip();
+      drawImageCover(ctx,img,px,py,pw,ph);
+      ctx.restore();
+      // 구역 테두리
+      ctx.strokeStyle='rgba(255,255,255,.15)';ctx.lineWidth=1;
+      ctx.beginPath();rrect(ctx,px,py,pw,ph,10);ctx.stroke();
+      drawContent(py+ph+18);
     };
-    img.onerror=()=>{drawSummary(ctx,log,W,30);finalize();};
+    img.onerror=()=>drawContent(30);
     img.src=log.image;
-  }else{drawSummary(ctx,log,W,30);finalize();}
+  }else{drawContent(30);}
 }
 
 function downloadTierCard(){
