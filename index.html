@@ -525,12 +525,11 @@ textarea{resize:vertical;min-height:240px;line-height:1.8;width:100%;}
     </div>
 
     <div class="btn-row">
-      <button class="btn btn-secondary" onclick="saveDraft()">💾 임시저장</button>
-      <button class="btn btn-primary" id="btnSave" onclick="saveLog()" disabled>✅ 저장 (인정)</button>
+      <button class="btn btn-primary" id="btnSave" onclick="saveLog()">✅ 저장</button>
       <button class="btn btn-green" id="btnSubmit" onclick="submitLog()" disabled>🚀 제출 (선생님께 전송)</button>
     </div>
     <div style="font-size:.76rem;color:var(--muted);margin-top:10px;text-align:right;">
-      * 저장은 이 기기에, 제출은 선생님 시스템으로 전송됩니다.
+      * 150자 이상 작성 시 제출 버튼이 활성화됩니다. 저장은 언제든 가능합니다.
     </div>
   </div>
 </div>
@@ -753,7 +752,7 @@ textarea{resize:vertical;min-height:240px;line-height:1.8;width:100%;}
     <div class="summary-modal-footer">
       <button class="btn btn-secondary btn-sm" onclick="closeSummary()">닫기</button>
       <button class="btn btn-secondary btn-sm" onclick="downloadSummaryCard()">🖼️ 이미지 저장</button>
-      <button class="btn btn-primary btn-sm" onclick="submitFromModal()">🚀 제출하기</button>
+      <button class="btn btn-primary btn-sm" id="btnModalSubmit" onclick="submitFromModal()">🚀 제출하기</button>
     </div>
   </div>
 </div>
@@ -1079,20 +1078,21 @@ function blockPaste(e){e.preventDefault();showToast('❌ 붙여넣기는 사용�
 function updateByteCount(){
   const txt=document.getElementById('bookContent').value;
   const b=getCharCount(txt);
-  const pct=Math.min(100,(b/300)*100);
+  const pct=Math.min(100,(b/150)*100);
   document.getElementById('lineProgress').style.width=pct+'%';
   const counter=document.getElementById('lineCounter');
   const hint=document.getElementById('lineHint');
   counter.textContent=b+'자';
   if(b===0){counter.className='line-counter';hint.className='line-hint';hint.textContent='아직 내용을 입력하지 않았습니다.';}
-  else if(b< 150){counter.className='line-counter warn';hint.className='line-hint warn';hint.textContent=`인정까지 ${150-b}자 더 필요합니다. (현재 ${b}자 / 300자 이상 인정)`;}
+  else if(b< 150){counter.className='line-counter warn';hint.className='line-hint warn';hint.textContent=`인정까지 ${150-b}자 더 필요합니다. (현재 ${b}자 / 150자 이상 인정)`;}
   else{counter.className='line-counter ok';hint.className='line-hint ok';hint.textContent=`✅ 인정 기준 달성! (${b}자 작성)`;}
   checkSaveBtn();
 }
 function checkSaveBtn(){
-  const ok=getCharCount(document.getElementById('bookContent').value)>= 150&&document.getElementById('bookTitle').value.trim();
-  document.getElementById('btnSave').disabled=!ok;
-  document.getElementById('btnSubmit').disabled=!ok;
+  const hasTitle=!!document.getElementById('bookTitle').value.trim();
+  const meetsCount=getCharCount(document.getElementById('bookContent').value)>= 150;
+  document.getElementById('btnSave').disabled=!hasTitle;
+  document.getElementById('btnSubmit').disabled=!(hasTitle&&meetsCount);
 }
 
 // ══ STARS ══
@@ -1190,26 +1190,22 @@ function upsertLog(d){
   const idx=state.logs.findIndex(l=>l.id===d.id);
   if(idx!==-1)state.logs[idx]=d;else state.logs.unshift(d);
 }
-function saveDraft(){
-  const d=getFormData();
-  if(!d.title){showToast('❌ 책 제목을 입력해주세요.');return;}
-  if(!d.content){showToast('❌ 내용을 입력해주세요.');return;}
-  d.status='temp';upsertLog(d);save();
-  showToast(editingId?'💾 임시저장 업데이트 완료!':'💾 임시저장 완료!');
-  clearForm();
-}
 function saveLog(){
   const d=getFormData();
   if(!d.title){showToast('❌ 책 제목을 입력해주세요.');return;}
-  if(getCharCount(d.content)< 150){showToast('❌ 300자 이상 작성해야 저장됩니다.');return;}
-  d.status='ok';upsertLog(d);save();
-  showToast(editingId?'✅ 독서록 수정 완료!':'✅ 독서록 저장 완료!');
+  if(!d.content){showToast('❌ 내용을 입력해주세요.');return;}
+  const meetsCount=getCharCount(d.content)>=150;
+  d.status=meetsCount?'ok':'temp';
+  upsertLog(d);save();
+  showToast(editingId
+    ?'✅ 독서록 수정 완료!'
+    :(meetsCount?'✅ 저장 완료! (인정 기준 달성)':'💾 저장 완료 (인정 기준 미달 — 제출 불가)'));
   clearForm();
 }
 function submitLog(){
   const d=getFormData();
   if(!d.title){showToast('❌ 책 제목을 입력해주세요.');return;}
-  if(getCharCount(d.content)< 150){showToast('❌ 300자 이상 작성해야 제출됩니다.');return;}
+  if(getCharCount(d.content)< 150){showToast('❌ 150자 이상 작성해야 제출됩니다.');return;}
   d.status='ok';currentModalLog=d;modalIsNew=true;
   showSummaryModal(d,true);
 }
@@ -1473,6 +1469,11 @@ function showSummaryModal(log,isNew){
     ${log.review?`<div class="sc-review">"${esc(log.review)}"</div>`:''}
     <div class="sc-reader">📚 ${esc(state.student||'독자')}</div>
   `;
+  // 기준 미달이면 제출 버튼 비활성
+  const meetsCount=getCharCount(log.content||'')>=150;
+  const btn=document.getElementById('btnModalSubmit');
+  btn.disabled=!meetsCount;
+  btn.title=meetsCount?'':'150자 이상 작성해야 제출할 수 있습니다.';
   document.getElementById('summaryModal').classList.add('open');
 }
 function closeSummary(){document.getElementById('summaryModal').classList.remove('open');}
