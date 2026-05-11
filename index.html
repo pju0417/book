@@ -914,28 +914,31 @@ function setStoredPw(pw){localStorage.setItem(PW_KEY,hashPw(pw));}
 function renderLoginScreen(){
   const wrap=document.getElementById('loginWrap');
   const box=document.getElementById('loginBox');
+  // 이름·URL·비밀번호 모두 설정된 경우에만 로그인 화면, 그 외 초기 설정
   const hasPw=!!getStoredPw();
+  const hasName=!!(state.student&&state.student.trim());
+  const hasURL=!!(state.scriptURL&&state.scriptURL.trim());
+  const isSetupDone=hasPw&&hasName&&hasURL;
 
-  if(!hasPw){
-    // 최초 방문 — 비밀번호 설정
+  if(!isSetupDone){
+    // 초기 설정 화면
     box.innerHTML=`
       <div class="student-login-logo">📚</div>
       <div class="student-login-title">나의 독서록</div>
-      <div class="student-login-sub">처음 오셨군요! 비밀번호를 설정해 주세요.</div>
-      <input type="text" id="loginName" placeholder="이름 (예: 3학년 1반 김철수)" autocomplete="off">
-      <input type="text" id="loginUrl" placeholder="선생님께 받은 Google Script URL" autocomplete="off" style="font-size:.82rem;">
+      <div class="student-login-sub">처음 오셨군요! 아래 정보를 입력해 주세요.</div>
+      <input type="text" id="loginName" placeholder="이름 (선생님 명단에 등록된 이름 그대로)" autocomplete="off" value="${esc(state.student||'')}">
+      <input type="text" id="loginUrl" placeholder="선생님께 받은 Google Script URL" autocomplete="off" style="font-size:.82rem;" value="${esc(state.scriptURL||'')}">
       <input type="password" id="loginPw1" placeholder="비밀번호 설정 (4자 이상)" autocomplete="new-password">
       <input type="password" id="loginPw2" placeholder="비밀번호 확인" onkeydown="if(event.key==='Enter')doFirstSetup()">
       <div class="student-login-err" id="loginErr"></div>
       <button class="student-login-btn" onclick="doFirstSetup()">✅ 설정하고 시작하기</button>
       <div class="student-login-hint">비밀번호는 이 기기에만 저장됩니다.</div>`;
   }else{
-    // 재방문 — 비밀번호 입력
-    const name=state.student||'';
+    // 재방문 로그인 화면
     box.innerHTML=`
       <div class="student-login-logo">📚</div>
       <div class="student-login-title">나의 독서록</div>
-      <div class="student-login-sub">${name?esc(name)+'님, 반갑습니다!':'비밀번호를 입력해 주세요.'}</div>
+      <div class="student-login-sub">${esc(state.student)}님, 반갑습니다!</div>
       <input type="password" id="loginPw" placeholder="비밀번호" onkeydown="if(event.key==='Enter')doLogin()">
       <div class="student-login-err" id="loginErr"></div>
       <button class="student-login-btn" onclick="doLogin()">🔓 로그인</button>
