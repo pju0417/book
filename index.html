@@ -1035,12 +1035,99 @@ function changePassword(){
   showToast('✅ 비밀번호가 변경되었습니다.');
 }
 
+function normalizeText(v){
+  if(v == null) return '';
+  if(typeof v === 'string') return v;
+  if(typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if(typeof v === 'object'){
+    if(typeof v.text === 'string') return v.text;
+    if(typeof v.comment === 'string') return v.comment;
+    if(typeof v.value === 'string') return v.value;
+    if(typeof v.message === 'string') return v.message;
+    try{return JSON.stringify(v);}catch(e){return '';}
+  }
+  return String(v);
+}
+
+function normalizeState(){
+  if(!state || typeof state !== 'object'){
+    state={student:'',scriptURL:'',logs:[],scoreHistory:[],transcriptions:[]};
+  }
+
+  state.student=normalizeText(state.student);
+  state.scriptURL=normalizeText(state.scriptURL);
+  if(!Array.isArray(state.logs)) state.logs=[];
+  if(!Array.isArray(state.scoreHistory)) state.scoreHistory=[];
+  if(!Array.isArray(state.transcriptions)) state.transcriptions=[];
+
+  state.logs=state.logs.map((log,idx)=>{
+    log=(log && typeof log==='object') ? log : {};
+    return {
+      ...log,
+      id: normalizeText(log.id) || String(Date.now()+'_'+idx),
+      title: normalizeText(log.title),
+      author: normalizeText(log.author),
+      startDate: normalizeText(log.startDate),
+      endDate: normalizeText(log.endDate),
+      date: normalizeText(log.date),
+      genre: normalizeText(log.genre),
+      content: normalizeText(log.content),
+      review: normalizeText(log.review),
+      savedAt: normalizeText(log.savedAt),
+      sentAt: normalizeText(log.sentAt),
+      status: normalizeText(log.status) || 'temp',
+      teacherComment: normalizeText(log.teacherComment),
+      teacherScore: log.teacherScore==='' || log.teacherScore==null ? null : Number(log.teacherScore),
+      stars: Number(log.stars) || 0,
+      image: typeof log.image==='string' ? log.image : null
+    };
+  });
+
+  state.scoreHistory=state.scoreHistory.map((h,idx)=>{
+    h=(h && typeof h==='object') ? h : {};
+    return {
+      ...h,
+      id: normalizeText(h.id) || String(Date.now()+'_score_'+idx),
+      type: normalizeText(h.type),
+      title: normalizeText(h.title),
+      reason: normalizeText(h.reason),
+      comment: normalizeText(h.comment),
+      date: normalizeText(h.date),
+      score: Number(h.score) || 0
+    };
+  });
+
+  state.transcriptions=state.transcriptions.map((book,idx)=>{
+    book=(book && typeof book==='object') ? book : {};
+    const entries=Array.isArray(book.entries) ? book.entries : [];
+    return {
+      ...book,
+      id: normalizeText(book.id) || String(Date.now()+'_tr_'+idx),
+      title: normalizeText(book.title),
+      author: normalizeText(book.author),
+      createdAt: normalizeText(book.createdAt),
+      entries: entries.map((entry,eidx)=>{
+        entry=(entry && typeof entry==='object') ? entry : {};
+        return {
+          ...entry,
+          id: normalizeText(entry.id) || String(Date.now()+'_entry_'+idx+'_'+eidx),
+          page: normalizeText(entry.page),
+          text: normalizeText(entry.text),
+          date: normalizeText(entry.date),
+          submitted: !!entry.submitted,
+          scored: !!entry.scored,
+          score: entry.score==='' || entry.score==null ? null : Number(entry.score),
+          comment: normalizeText(entry.comment)
+        };
+      })
+    };
+  });
+}
+
 function load(){
   const s=localStorage.getItem('readingLog_v2');
   if(s){try{state=JSON.parse(s);}catch(e){}}
-  if(!state.logs)state.logs=[];
-  if(!state.scoreHistory)state.scoreHistory=[];
-  if(!state.transcriptions)state.transcriptions=[];
+  normalizeState();
   applySettings();renderStats();renderList();
   renderTier();renderTierTable();renderScoreHistory();
   setTodayDates();populateWriteBookSelect();
@@ -1073,7 +1160,7 @@ function switchTab(id){
 }
 
 // ══ BYTE COUNT ══
-function getCharCount(s){return (s||'').replace(/\s/g,'').length;}
+function getCharCount(s){return String(s ?? '').replace(/\s/g,'').length;}
 function blockPaste(e){e.preventDefault();showToast('❌ 붙여넣기는 사용할 수 없습니다.');}
 function updateByteCount(){
   const txt=document.getElementById('bookContent').value;
@@ -2088,7 +2175,9 @@ function importData(e){
     try{
       const d=JSON.parse(ev.target.result);
       if(confirm(`불러오면 현재 데이터를 덮어씁니다.\n독서록 ${d.logs?.length||0}개`)){
-        state=d;save();applySettings();renderList();renderTier();renderStats();
+        state=d;
+        normalizeState();
+        save();applySettings();renderList();renderTier();renderStats();renderScoreHistory();populateWriteBookSelect();populateTrBookSelect();renderTrBookList();renderShelf();
         showToast('📂 데이터 불러오기 완료!');
       }
     }catch(e2){showToast('❌ 파일 형식 오류');}
@@ -2097,13 +2186,19 @@ function importData(e){
 }
 function clearAll(){
   if(!confirm('⚠️ 모든 독서록 데이터가 삭제됩니다.'))return;
-  state={student:'',scriptURL:'',logs:[],scoreHistory:[]};
-  save();applySettings();renderList();renderTier();renderStats();
+  state={student:'',scriptURL:'',logs:[],scoreHistory:[],transcriptions:[]};
+  save();applySettings();renderList();renderTier();renderStats();renderScoreHistory();populateWriteBookSelect();populateTrBookSelect();renderTrBookList();renderShelf();
   showToast('🗑️ 초기화 완료');
 }
 
 // ══ UTILS ══
-function esc(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function esc(s){
+  return String(s ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
 let toastTimer;
 function showToast(msg){
   const t=document.getElementById('toast');
