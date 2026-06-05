@@ -9,7 +9,7 @@
 :root {
   --bg:#faf7f2; --paper:#fffef9; --navy:#1a2744; --green:#2d5a3d;
   --amber:#c8860a; --amber-light:#f5e6c0; --amber-pale:#fdf5e0;
-  --red:#b33a3a; --text:#2c2c2c; --muted:#7a7a7a;
+  --red:#b33a3a; --blue:#1a5fb4; --text:#2c2c2c; --muted:#7a7a7a;
   --border:#d6c9a8; --shadow:0 4px 20px rgba(26,39,68,.10); --radius:12px;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -897,6 +897,33 @@ function jsonpFetch(url){
   });
 }
 
+
+function getArray(data,key){
+  if(data&&Array.isArray(data[key]))return data[key];
+  if(Array.isArray(data))return data;
+  return [];
+}
+
+function isSuccessfulResponse(data){
+  if(!data||typeof data!=='object')return true;
+  if(data.success===false||data.ok===false)return false;
+  if(data.error)return false;
+  return true;
+}
+
+async function postToScript(payload){
+  const body=JSON.stringify(payload);
+  // Apps Script 웹 앱은 CORS 응답이 없는 경우가 많다. CORS 확인 요청을 먼저 보내면
+  // 서버에는 기록됐지만 브라우저만 차단되어 재전송 중복이 생길 수 있으므로 no-cors 1회만 보낸다.
+  await fetch(state.scriptURL,{
+    method:'POST',
+    mode:'no-cors',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body
+  });
+  return {confirmed:false};
+}
+
 // ══ 학생 로그인 ══
 const PW_KEY = 'readingLog_pw';
 
@@ -1017,6 +1044,8 @@ function doResetAll(){
   }
   localStorage.removeItem(PW_KEY);
   localStorage.removeItem('readingLog_v2');
+  localStorage.removeItem(IMAGE_STORE_KEY);
+  imageCache={};
   state={student:'',scriptURL:'',logs:[],scoreHistory:[],transcriptions:[]};
   renderLoginScreen();
 }
@@ -1124,17 +1153,64 @@ function normalizeState(){
   });
 }
 
+var imageCache={};
+const IMAGE_STORE_KEY='readingLog_images_v2';
+
+function loadImageCache(){
+  try{
+    imageCache=JSON.parse(localStorage.getItem(IMAGE_STORE_KEY)||'{}')||{};
+  }catch(e){imageCache={};}
+}
+
+function saveImageCache(){
+  try{
+    const usedIds=new Set(state.logs.map(l=>l.id));
+    Object.keys(imageCache).forEach(id=>{if(!usedIds.has(id))delete imageCache[id];});
+    localStorage.setItem(IMAGE_STORE_KEY,JSON.stringify(imageCache));
+    return true;
+  }catch(e){
+    console.warn('사진 저장 실패:',e.message);
+    showToast('⚠️ 사진 저장 공간이 부족할 수 있습니다. 데이터 내보내기로 백업해 주세요.');
+    return false;
+  }
+}
+
+function save(){
+  try{
+    const stateToSave={
+      ...state,
+      logs:state.logs.map(l=>{
+        if(l.image){imageCache[l.id]=l.image;}
+        return {...l,image:null};
+      })
+    };
+    localStorage.setItem('readingLog_v2',JSON.stringify(stateToSave));
+    saveImageCache();
+  }catch(e){
+    console.warn('localStorage 저장 실패:',e.message);
+    showToast('⚠️ 저장 공간이 부족해 일부 데이터가 저장되지 않았을 수 있습니다.');
+  }
+  renderStats();
+}
+
+function restoreImagesFromCache(){
+  loadImageCache();
+  state.logs.forEach(l=>{
+    if(!l.image&&imageCache[l.id])l.image=imageCache[l.id];
+  });
+}
+
 function load(){
   const s=localStorage.getItem('readingLog_v2');
   if(s){try{state=JSON.parse(s);}catch(e){}}
   normalizeState();
+  restoreImagesFromCache();
   applySettings();renderStats();renderList();
   renderTier();renderTierTable();renderScoreHistory();
   setTodayDates();populateWriteBookSelect();
   // 로그인 화면 표시 (항상 앱 로드 후 실행)
   renderLoginScreen();
 }
-function save(){localStorage.setItem('readingLog_v2',JSON.stringify(state));renderStats();}
 function setTodayDates(){
   const s=new Date().toISOString().split('T')[0];
   document.getElementById('startDate').value=s;
@@ -1253,10 +1329,12 @@ function editLog(id){
   currentStar=log.stars||0;
   document.querySelectorAll('.star').forEach((s,i)=>s.classList.toggle('active',i<currentStar));
   document.getElementById('starLabel').textContent=STAR_LABELS[currentStar]||'선택 안 함';
-  if(log.image){
-    currentImageBase64=log.image;
+  // 이미지 복원: 메모리 이미지 또는 저장된 이미지
+  const img=log.image||imageCache[log.id]||null;
+  if(img){
+    currentImageBase64=img;
     const p=document.getElementById('imgPreview');
-    p.src=log.image;p.style.display='block';
+    p.src=img;p.style.display='block';
     document.getElementById('uploadLabel').textContent='📷 사진이 첨부되었습니다';
     document.getElementById('imgRemoveBtn').style.display='block';
   }else{removeImage();}
@@ -1463,24 +1541,25 @@ async function submitTrBook(bookId){
   const book=state.transcriptions.find(b=>b.id===bookId);if(!book)return;
   if(!book.entries.length){showToast('❌ 필사 내용이 없습니다.');return;}
   const sentAt=new Date().toISOString();
-  // 필사 항목 1개 = 행 1줄로 전송
   const payload={
     type:'transcription',
+    id:book.id,
     student:state.student,
     title:book.title,
     author:book.author||'',
     sentAt,
     count:book.entries.length,
-    entries:book.entries.map(e=>({page:e.page||'',text:e.text,date:e.date||''}))
+    entries:book.entries.map(e=>({id:e.id,page:e.page||'',text:e.text,date:e.date||''}))
   };
+  let result;
   try{
     showToast('📡 필사 제출 중...');
-    await fetch(state.scriptURL,{method:'POST',mode:'no-cors',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    book.sentAt=new Date().toLocaleDateString('ko');
-    save();renderTrBookList();
-    showToast('🚀 필사 제출 완료! 선생님께 전송되었습니다.');
-  }catch(e){showToast('❌ 전송 실패: '+e.message);}
+    result=await postToScript(payload);
+  }catch(e){showToast('❌ 전송 실패: '+e.message);return;}
+  // 전송 성공 후 로컬 상태 업데이트
+  book.sentAt=new Date().toLocaleDateString('ko');
+  save();renderTrBookList();
+  showToast(result&&result.confirmed?'🚀 필사 제출 확인 완료!':'📤 필사 전송 요청 완료! 선생님 시트에서 확인해 주세요.');
 }
 
 // ══ SCORE SYNC ══
@@ -1490,49 +1569,55 @@ async function syncScores(){
   const btn=document.getElementById('btnSyncScore');
   btn.disabled=true;btn.textContent='🔄 불러오는 중...';
   try{
-    const res=await fetch(state.scriptURL+'?student='+encodeURIComponent(state.student));
-    const data=await res.json();
+    const data=await jsonpFetch(state.scriptURL+'?mode=student&student='+encodeURIComponent(state.student));
     let added=0;
 
     // 독서록 점수
-    (data.reviews||data).forEach(item=>{
-      if(!item.score||item.score==='')return;
+    const reviews=getArray(data,'reviews');
+    reviews.forEach(item=>{
+      if(!item||!item.score||item.score==='')return;
       const score=Number(item.score);if(isNaN(score)||score<=0)return;
-      const exists=state.scoreHistory.some(h=>h.logTitle===item.title&&h.score===score&&h.type!=='extra');
+      const itemId=String(item.id||item.logId||'');
+      const itemTitle=item.title||item.logTitle||'';
+      const exists=state.scoreHistory.some(h=>
+        h.type==='book'&&((itemId&&h.id===itemId)||(!itemId&&h.logTitle===itemTitle&&h.score===score))
+      );
       if(!exists){
-        state.scoreHistory.push({type:'book',logTitle:item.title,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
-        const log=state.logs.find(l=>l.title===item.title);
+        state.scoreHistory.push({id:itemId||undefined,type:'book',logTitle:itemTitle,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
+        const log=state.logs.find(l=>(itemId&&l.id===itemId)||(!itemId&&l.title===itemTitle));
         if(log){log.teacherScore=score;log.teacherComment=item.comment||'';log.status='sent';}
         added++;
       }
     });
 
     // 추가 점수
-    if(data.extras){
-      data.extras.forEach(item=>{
-        const score=Number(item.score);if(isNaN(score)||score<=0)return;
-        const exists=state.scoreHistory.some(h=>h.type==='extra'&&h.reason===item.reason&&h.date===item.date);
-        if(!exists){
-          state.scoreHistory.push({type:'extra',reason:item.reason,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
-          added++;
-        }
-      });
-    }
+    getArray(data,'extras').forEach(item=>{
+      if(!item)return;
+      const score=Number(item.score);if(isNaN(score)||score<=0)return;
+      const exists=state.scoreHistory.some(h=>h.type==='extra'&&h.reason===item.reason&&h.date===item.date);
+      if(!exists){
+        state.scoreHistory.push({type:'extra',reason:item.reason,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
+        added++;
+      }
+    });
 
     // 필사 점수
-    if(data.transcriptions){
-      data.transcriptions.forEach(item=>{
-        const score=Number(item.score);if(isNaN(score)||score<=0)return;
-        const exists=state.scoreHistory.some(h=>h.type==='transcription'&&h.logTitle===item.title&&h.score===score);
-        if(!exists){
-          state.scoreHistory.push({type:'transcription',logTitle:item.title,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
-          // 필사 책에 점수 반영
-          const trBook=state.transcriptions.find(b=>b.title===item.title);
-          if(trBook){trBook.trScore=score;trBook.trComment=item.comment||'';}
-          added++;
-        }
-      });
-    }
+    getArray(data,'transcriptions').forEach(item=>{
+      if(!item)return;
+      const score=Number(item.score);if(isNaN(score)||score<=0)return;
+      const itemId=String(item.id||item.bookId||'');
+      const itemTitle=item.title||item.logTitle||'';
+      const exists=state.scoreHistory.some(h=>
+        h.type==='transcription'&&((itemId&&h.id===itemId)||(!itemId&&h.logTitle===itemTitle&&h.score===score))
+      );
+      if(!exists){
+        state.scoreHistory.push({id:itemId||undefined,type:'transcription',logTitle:itemTitle,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
+        // 필사 책에 점수 반영
+        const trBook=state.transcriptions.find(b=>(itemId&&b.id===itemId)||(!itemId&&b.title===itemTitle));
+        if(trBook){trBook.trScore=score;trBook.trComment=item.comment||'';}
+        added++;
+      }
+    });
     save();renderTier();renderTierTable();renderScoreHistory();renderList();renderTrBookList();
     showToast(added>0?`✅ 점수 ${added}개 반영되었습니다!`:'이미 최신 상태입니다.');
   }catch(e){showToast('❌ 점수 불러오기 실패: '+e.message);}
@@ -1573,17 +1658,20 @@ function sendExisting(id){
 // ══ SUBMIT ══
 async function doSubmit(logData,isNew){
   if(!state.scriptURL){showToast('⚠️ 설정 탭에서 Google Script URL을 먼저 입력해주세요.');return;}
-  const payload={student:state.student||'이름없음',title:logData.title,author:logData.author,
+  const payload={id:logData.id,student:state.student||'이름없음',title:logData.title,author:logData.author,
     startDate:logData.startDate,endDate:logData.endDate,genre:logData.genre,
     content:logData.content,stars:logData.stars,review:logData.review,sentAt:new Date().toISOString()};
+  let result;
   try{
     showToast('📡 전송 중...');
-    await fetch(state.scriptURL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    logData.status='sent';logData.sentAt=new Date().toISOString();
-    if(isNew){state.logs.unshift(logData);clearForm();}
-    else{const idx=state.logs.findIndex(l=>l.id===logData.id);if(idx!==-1)state.logs[idx]=logData;}
-    save();renderList();showToast('🚀 제출 완료! 선생님께 전송되었습니다.');
-  }catch(e){showToast('❌ 전송 실패: '+e.message);}
+    result=await postToScript(payload);
+  }catch(e){showToast('❌ 전송 실패: '+e.message);return;}
+  // 전송 성공 후 로컬 상태 업데이트
+  logData.status='sent';logData.sentAt=new Date().toISOString();
+  if(logData.image)imageCache[logData.id]=logData.image;
+  if(isNew){state.logs.unshift(logData);clearForm();}
+  else{const idx=state.logs.findIndex(l=>l.id===logData.id);if(idx!==-1)state.logs[idx]=logData;}
+  save();renderList();showToast(result&&result.confirmed?'🚀 제출 확인 완료!':'📤 전송 요청 완료! 선생님 시트에서 확인해 주세요.');
 }
 
 // ══ IMAGE EXPORT ══
@@ -1812,8 +1900,10 @@ function onTrBookSelect(){
   let book;
   if(val.startsWith('log::')){
     // 독서록 도서 → 필사에 자동 등록
-    const parts=val.split('::');
-    const title=parts[1], author=parts[2]||'';
+    const raw=val.slice(5);
+    const sep=raw.indexOf('::');
+    const title=sep>=0?raw.slice(0,sep):raw;
+    const author=sep>=0?raw.slice(sep+2):'';
     // 이미 등록된 것 다시 확인
     const existing=state.transcriptions.find(b=>b.title===title);
     if(existing){book=existing;}
@@ -1875,7 +1965,7 @@ function addNewTrBook(){
   toggleNewBookForm();
   populateTrBookSelect();
   renderTrBookList();
-  document.getElementById('trBookSelect').value=book.id;
+  document.getElementById('trBookSelect').value='tr::'+book.id;
   selectedTrBookId=book.id;
   document.getElementById('trAddBookLabel').textContent=book.title;
   document.getElementById('trAddArea').style.display='block';
@@ -2200,7 +2290,9 @@ async function restoreFromSheets(){
 
 // ══ DATA ══
 function exportData(){
-  const b=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+  restoreImagesFromCache();
+  const exportState={...state,_imageCache:imageCache};
+  const b=new Blob([JSON.stringify(exportState,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);
   a.download=`독서록_${state.student||'학생'}_${new Date().toLocaleDateString('ko')}.json`;a.click();
 }
@@ -2210,9 +2302,14 @@ function importData(e){
   reader.onload=ev=>{
     try{
       const d=JSON.parse(ev.target.result);
-      if(confirm(`불러오면 현재 데이터를 덮어씁니다.\n독서록 ${d.logs?.length||0}개`)){
+      if(confirm(`불러오면 현재 데이터를 덮어씁니다.
+독서록 ${d.logs?.length||0}개`)){
+        imageCache=d._imageCache||{};
+        delete d._imageCache;
         state=d;
         normalizeState();
+        state.logs.forEach(l=>{if(l.image)imageCache[l.id]=l.image;});
+        saveImageCache();
         save();applySettings();renderList();renderTier();renderStats();renderScoreHistory();populateWriteBookSelect();populateTrBookSelect();renderTrBookList();renderShelf();
         showToast('📂 데이터 불러오기 완료!');
       }
@@ -2223,6 +2320,8 @@ function importData(e){
 function clearAll(){
   if(!confirm('⚠️ 모든 독서록 데이터가 삭제됩니다.'))return;
   state={student:'',scriptURL:'',logs:[],scoreHistory:[],transcriptions:[]};
+  imageCache={};
+  localStorage.removeItem(IMAGE_STORE_KEY);
   save();applySettings();renderList();renderTier();renderStats();renderScoreHistory();populateWriteBookSelect();populateTrBookSelect();renderTrBookList();renderShelf();
   showToast('🗑️ 초기화 완료');
 }
