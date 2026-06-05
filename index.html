@@ -666,7 +666,10 @@ textarea{resize:vertical;min-height:240px;line-height:1.8;width:100%;}
       <label>Google Script URL</label>
       <input type="text" id="settingURL" placeholder="Apps Script 웹 앱 URL을 붙여넣으세요">
     </div>
-    <button class="btn btn-secondary" onclick="saveSetting()">✅ 설정 저장</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="saveSetting()">✅ 설정 저장</button>
+      <button class="btn btn-green" onclick="checkSettingURL()">🔗 URL 연결 확인</button>
+    </div>
   </div>
 
   <p class="section-title">🔐 비밀번호 변경</p>
@@ -911,6 +914,52 @@ function isSuccessfulResponse(data){
   return true;
 }
 
+function normalizeScriptURL(url){
+  return (url||'').trim();
+}
+
+function isProbablyAppsScriptURL(url){
+  const u=normalizeScriptURL(url);
+  if(!/^https:\/\//i.test(u))return false;
+  return /script\.google\.com\/macros\/s\/.+\/exec/i.test(u)||/script\.googleusercontent\.com\/macros\/echo/i.test(u);
+}
+
+async function checkScriptURLConnection(url,opts={}){
+  const silent=!!opts.silent;
+  const u=normalizeScriptURL(url);
+  if(!u){
+    const msg='Google Script URL이 비어 있습니다.';
+    if(!silent)showToast('⚠️ '+msg);
+    return {ok:false,message:msg};
+  }
+  if(!isProbablyAppsScriptURL(u)){
+    const msg='Google Apps Script 웹 앱 URL 형식이 아닙니다. /macros/s/.../exec 주소인지 확인하세요.';
+    if(!silent)showToast('⚠️ '+msg);
+    return {ok:false,message:msg};
+  }
+  try{
+    // 기존 교사용 Apps Script가 JSONP callback을 지원하는지 실제로 확인한다.
+    // mode=getStudentList는 이미 로그인 검증에서 쓰는 가장 안전한 조회 요청이다.
+    await jsonpFetch(u+(u.includes('?')?'&':'?')+'mode=getStudentList&_check='+(Date.now()));
+    if(!silent)showToast('✅ Google Script URL 연결 확인 완료!');
+    return {ok:true,message:'connected'};
+  }catch(e){
+    const msg='URL 연결 확인 실패: '+(e&&e.message?e.message:'응답 없음');
+    if(!silent)showToast('❌ '+msg);
+    return {ok:false,message:msg};
+  }
+}
+
+async function ensureScriptReady(actionLabel){
+  if(!state.scriptURL){showToast('⚠️ 설정 탭에서 Google Script URL을 먼저 입력해주세요.');return false;}
+  const result=await checkScriptURLConnection(state.scriptURL,{silent:true});
+  if(!result.ok){
+    showToast('❌ '+(actionLabel||'작업')+' 불가: '+result.message);
+    return false;
+  }
+  return true;
+}
+
 async function postToScript(payload){
   const body=JSON.stringify(payload);
   // Apps Script 웹 앱은 CORS 응답이 없는 경우가 많다. CORS 확인 요청을 먼저 보내면
@@ -984,20 +1033,25 @@ async function doFirstSetup(){
   if(pw1.length<4){err.textContent='비밀번호는 4자 이상이어야 합니다.';return;}
   if(pw1!==pw2){err.textContent='비밀번호가 일치하지 않습니다.';return;}
 
+  // URL 형식 및 연결 검증
+  err.textContent='Google Script URL 연결 확인 중...';
+  const urlCheck=await checkScriptURLConnection(url,{silent:true});
+  if(!urlCheck.ok){err.textContent='❌ '+urlCheck.message;return;}
+
   // 명단 검증
   err.textContent='명단 확인 중...';
   try{
-    const roster=await jsonpFetch(url+'?mode=getStudentList');
+    const roster=await jsonpFetch(url+(url.includes('?')?'&':'?')+'mode=getStudentList');
     if(Array.isArray(roster)&&roster.length>0){
       if(!roster.includes(name)){
         err.textContent='❌ 명단에 없는 이름입니다. 선생님이 등록한 이름을 정확히 입력해 주세요.';
         return;
       }
     }
-  }catch(e){/* 네트워크 오류 시 통과 */}
+  }catch(e){err.textContent='❌ 명단 확인 실패: URL 또는 배포 상태를 확인해 주세요.';return;}
 
   state.student=name;
-  state.scriptURL=url;
+  state.scriptURL=normalizeScriptURL(url);
   setStoredPw(pw1);
   save();
   hideLogin();
@@ -1418,6 +1472,7 @@ function renderList(){
         <button class="btn btn-edit btn-sm" onclick="editLog('${log.id}')">✏️ 편집</button>
         <button class="btn btn-secondary btn-sm" onclick="openSummary('${log.id}')">🃏 요약카드</button>
         ${log.status==='ok'?`<button class="btn btn-green btn-sm" onclick="sendExisting('${log.id}')">🚀 제출</button>`:''}
+        ${log.status==='sent'?`<button class="btn btn-secondary btn-sm" onclick="resubmitLog('${log.id}')">🔁 다시 제출</button>`:''}
         <button class="btn btn-danger btn-sm" onclick="deleteLog('${log.id}')">🗑️</button>
       </div>
       <div class="log-detail" id="detail_${log.id}">
@@ -1536,10 +1591,11 @@ function renderScoreHistory(){
 
 // ══ 필사 제출 ══
 async function submitTrBook(bookId){
-  if(!state.scriptURL){showToast('⚠️ 설정에서 Google Script URL을 먼저 입력해주세요.');return;}
+  if(!await ensureScriptReady('필사 제출'))return;
   if(!state.student){showToast('⚠️ 설정에서 학생 이름을 먼저 입력해주세요.');return;}
   const book=state.transcriptions.find(b=>b.id===bookId);if(!book)return;
   if(!book.entries.length){showToast('❌ 필사 내용이 없습니다.');return;}
+  if(book.sentAt&&!confirm('이 필사 기록을 선생님께 다시 제출할까요?\n기존 제출 기록과 중복될 수 있으니 수정 후 재제출할 때만 사용하세요.'))return;
   const sentAt=new Date().toISOString();
   const payload={
     type:'transcription',
@@ -1548,6 +1604,7 @@ async function submitTrBook(bookId){
     title:book.title,
     author:book.author||'',
     sentAt,
+    resubmit:!!book.sentAt,
     count:book.entries.length,
     entries:book.entries.map(e=>({id:e.id,page:e.page||'',text:e.text,date:e.date||''}))
   };
@@ -1564,7 +1621,7 @@ async function submitTrBook(bookId){
 
 // ══ SCORE SYNC ══
 async function syncScores(){
-  if(!state.scriptURL){showToast('⚠️ 설정에서 Google Script URL을 먼저 입력해주세요.');return;}
+  if(!await ensureScriptReady('점수 불러오기'))return;
   if(!state.student){showToast('⚠️ 설정에서 학생 이름을 먼저 입력해주세요.');return;}
   const btn=document.getElementById('btnSyncScore');
   btn.disabled=true;btn.textContent='🔄 불러오는 중...';
@@ -1654,13 +1711,19 @@ function sendExisting(id){
   const log=state.logs.find(l=>l.id===id);if(!log)return;
   currentModalLog=log;modalIsNew=false;showSummaryModal(log,false);
 }
+function resubmitLog(id){
+  const log=state.logs.find(l=>l.id===id);if(!log)return;
+  if(getCharCount(log.content||'')<150){showToast('❌ 150자 이상인 독서록만 다시 제출할 수 있습니다.');return;}
+  if(!confirm('이 독서록을 선생님께 다시 제출할까요?\n기존 제출 기록과 중복될 수 있으니 수정 후 재제출할 때만 사용하세요.'))return;
+  doSubmit(log,false,true);
+}
 
 // ══ SUBMIT ══
-async function doSubmit(logData,isNew){
-  if(!state.scriptURL){showToast('⚠️ 설정 탭에서 Google Script URL을 먼저 입력해주세요.');return;}
+async function doSubmit(logData,isNew,isResubmit=false){
+  if(!await ensureScriptReady(isResubmit?'다시 제출':'제출'))return;
   const payload={id:logData.id,student:state.student||'이름없음',title:logData.title,author:logData.author,
     startDate:logData.startDate,endDate:logData.endDate,genre:logData.genre,
-    content:logData.content,stars:logData.stars,review:logData.review,sentAt:new Date().toISOString()};
+    content:logData.content,stars:logData.stars,review:logData.review,sentAt:new Date().toISOString(),resubmit:!!isResubmit};
   let result;
   try{
     showToast('📡 전송 중...');
@@ -1821,10 +1884,19 @@ function downloadTierCard(){
 }
 
 // ══ SETTINGS ══
-function saveSetting(){
-  state.student=document.getElementById('settingName').value.trim();
-  state.scriptURL=document.getElementById('settingURL').value.trim();
-  save();applySettings();showToast('✅ 설정 저장 완료!');
+async function saveSetting(){
+  const name=document.getElementById('settingName').value.trim();
+  const url=normalizeScriptURL(document.getElementById('settingURL').value);
+  if(!name){showToast('⚠️ 학생 이름을 입력해주세요.');return;}
+  const check=await checkScriptURLConnection(url,{silent:true});
+  if(!check.ok){showToast('❌ 설정 저장 실패: '+check.message);return;}
+  state.student=name;
+  state.scriptURL=url;
+  save();applySettings();showToast('✅ 설정 저장 및 URL 연결 확인 완료!');
+}
+async function checkSettingURL(){
+  const url=normalizeScriptURL(document.getElementById('settingURL').value);
+  await checkScriptURLConnection(url,{silent:false});
 }
 
 // ══ 도서 공유: 독서록 쓰기 탭 ══
@@ -2080,7 +2152,7 @@ function renderTrBookList(){
           </div>`).join('')}
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-secondary btn-sm" onclick="document.getElementById('trBookSelect').value='tr::${book.id}';onTrBookSelect();setTimeout(()=>document.getElementById('trAddArea').scrollIntoView({behavior:'smooth',block:'nearest'}),100);">✍️ 필사 추가</button>
-          <button class="btn btn-green btn-sm" onclick="submitTrBook('${book.id}')" ${!book.entries.length?'disabled':''}>🚀 선생님께 제출</button>
+          <button class="btn ${book.sentAt?'btn-secondary':'btn-green'} btn-sm" onclick="submitTrBook('${book.id}')" ${!book.entries.length?'disabled':''}>${book.sentAt?'🔁 다시 제출':'🚀 선생님께 제출'}</button>
           ${book.sentAt?`<span class="${book.trScore!=null?'tr-scored':'tr-submitted'}">${book.trScore!=null?'✅ '+book.trScore+'점 채점됨':'📤 제출완료 ('+book.sentAt+')'}</span>`:''}
           <button class="btn btn-danger btn-sm" onclick="deleteTrBook('${book.id}')">🗑️ 책 삭제</button>
         </div>
@@ -2210,7 +2282,7 @@ function closeBookDetail(){
 
 // ══ 구글 시트에서 복원 ══
 async function restoreFromSheets(){
-  if(!state.scriptURL){showToast('⚠️ 설정에서 Google Script URL을 먼저 입력해주세요.');return;}
+  if(!await ensureScriptReady('제출 기록 복원'))return;
   if(!state.student){showToast('⚠️ 설정에서 학생 이름을 먼저 입력해주세요.');return;}
   if(!confirm(`"${state.student}"의 제출 기록을 구글 시트에서 불러옵니다.\n독서록·필사 모두 중복 없이 추가됩니다.\n계속할까요?`))return;
 
