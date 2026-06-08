@@ -1425,8 +1425,11 @@ function submitLog(){
   const d=getFormData();
   if(!d.title){showToast('❌ 책 제목을 입력해주세요.');return;}
   if(getCharCount(d.content)< 150){showToast('❌ 150자 이상 작성해야 제출됩니다.');return;}
-  d.status='ok';currentModalLog=d;modalIsNew=true;
-  showSummaryModal(d,true);
+  d.status='ok';
+  // 편집 중이면 isNew=false → doSubmit이 unshift(중복 추가) 하지 않음
+  var isNew=!editingId;
+  currentModalLog=d;modalIsNew=isNew;
+  showSummaryModal(d,isNew);
 }
 
 // ══ LIST ══
@@ -1636,15 +1639,18 @@ async function syncScores(){
       const score=Number(item.score);if(isNaN(score)||score<=0)return;
       const itemId=String(item.id||item.logId||'');
       const itemTitle=item.title||item.logTitle||'';
-      const exists=state.scoreHistory.some(h=>
-        h.type==='book'&&((itemId&&h.id===itemId)||(!itemId&&h.logTitle===itemTitle&&h.score===score))
+      const existIdx=state.scoreHistory.findIndex(h=>
+        h.type==='book'&&((itemId&&h.id===itemId)||(!itemId&&h.logTitle===itemTitle))
       );
-      if(!exists){
+      if(existIdx===-1){
         state.scoreHistory.push({id:itemId||undefined,type:'book',logTitle:itemTitle,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
-        const log=state.logs.find(l=>(itemId&&l.id===itemId)||(!itemId&&l.title===itemTitle));
-        if(log){log.teacherScore=score;log.teacherComment=item.comment||'';log.status='sent';}
+        added++;
+      }else if(state.scoreHistory[existIdx].score!==score){
+        state.scoreHistory[existIdx]=Object.assign({},state.scoreHistory[existIdx],{score:score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
         added++;
       }
+      const log=state.logs.find(l=>(itemId&&l.id===itemId)||(!itemId&&l.title===itemTitle));
+      if(log){log.teacherScore=score;log.teacherComment=item.comment||'';log.status='sent';}
     });
 
     // 추가 점수
@@ -1664,16 +1670,19 @@ async function syncScores(){
       const score=Number(item.score);if(isNaN(score)||score<=0)return;
       const itemId=String(item.id||item.bookId||'');
       const itemTitle=item.title||item.logTitle||'';
-      const exists=state.scoreHistory.some(h=>
-        h.type==='transcription'&&((itemId&&h.id===itemId)||(!itemId&&h.logTitle===itemTitle&&h.score===score))
+      const existTrIdx=state.scoreHistory.findIndex(h=>
+        h.type==='transcription'&&((itemId&&h.id===itemId)||(!itemId&&h.logTitle===itemTitle))
       );
-      if(!exists){
+      if(existTrIdx===-1){
         state.scoreHistory.push({id:itemId||undefined,type:'transcription',logTitle:itemTitle,score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
-        // 필사 책에 점수 반영
-        const trBook=state.transcriptions.find(b=>(itemId&&b.id===itemId)||(!itemId&&b.title===itemTitle));
-        if(trBook){trBook.trScore=score;trBook.trComment=item.comment||'';}
+        added++;
+      }else if(state.scoreHistory[existTrIdx].score!==score){
+        state.scoreHistory[existTrIdx]=Object.assign({},state.scoreHistory[existTrIdx],{score:score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
         added++;
       }
+      // 필사 책에 점수 반영
+      const trBook=state.transcriptions.find(b=>(itemId&&b.id===itemId)||(!itemId&&b.title===itemTitle));
+      if(trBook){trBook.trScore=score;trBook.trComment=item.comment||'';}
     });
     save();renderTier();renderTierTable();renderScoreHistory();renderList();renderTrBookList();
     showToast(added>0?`✅ 점수 ${added}개 반영되었습니다!`:'이미 최신 상태입니다.');
