@@ -1426,8 +1426,9 @@ function submitLog(){
   if(!d.title){showToast('❌ 책 제목을 입력해주세요.');return;}
   if(getCharCount(d.content)< 150){showToast('❌ 150자 이상 작성해야 제출됩니다.');return;}
   d.status='ok';
-  // 편집 중이면 isNew=false → doSubmit이 unshift(중복 추가) 하지 않음
-  var isNew=!editingId;
+  // 모달 열기 전에 먼저 로컬 저장 (upsert) → doSubmit에서 같은 id로 찾아 교체, 절대 중복 추가 안 됨
+  upsertLog(d);save();
+  const isNew=!editingId;
   currentModalLog=d;modalIsNew=isNew;
   showSummaryModal(d,isNew);
 }
@@ -1730,6 +1731,9 @@ function resubmitLog(id){
 // ══ SUBMIT ══
 async function doSubmit(logData,isNew,isResubmit=false){
   if(!await ensureScriptReady(isResubmit?'다시 제출':'제출'))return;
+  // 제출 버튼 비활성화 — 중복 클릭 방지
+  const modalBtn=document.getElementById('btnModalSubmit');
+  if(modalBtn){modalBtn.disabled=true;modalBtn.textContent='📡 전송 중...';}
   const payload={id:logData.id,student:state.student||'이름없음',title:logData.title,author:logData.author,
     startDate:logData.startDate,endDate:logData.endDate,genre:logData.genre,
     content:logData.content,stars:logData.stars,review:logData.review,sentAt:new Date().toISOString(),resubmit:!!isResubmit};
@@ -1737,12 +1741,19 @@ async function doSubmit(logData,isNew,isResubmit=false){
   try{
     showToast('📡 전송 중...');
     result=await postToScript(payload);
-  }catch(e){showToast('❌ 전송 실패: '+e.message);return;}
+  }catch(e){
+    if(modalBtn){modalBtn.disabled=false;modalBtn.textContent='🚀 제출하기';}
+    showToast('❌ 전송 실패: '+e.message);return;
+  }
   // 전송 성공 후 로컬 상태 업데이트
+  // isNew 분기 없이 항상 upsert — 같은 id가 이미 있으면 교체, 없으면 앞에 추가
   logData.status='sent';logData.sentAt=new Date().toISOString();
   if(logData.image)imageCache[logData.id]=logData.image;
-  if(isNew){state.logs.unshift(logData);clearForm();}
-  else{const idx=state.logs.findIndex(l=>l.id===logData.id);if(idx!==-1)state.logs[idx]=logData;}
+  const existIdx=state.logs.findIndex(l=>l.id===logData.id);
+  if(existIdx!==-1){state.logs[existIdx]=logData;}
+  else{state.logs.unshift(logData);}
+  if(isNew)clearForm();
+  if(modalBtn){modalBtn.disabled=false;modalBtn.textContent='🚀 제출하기';}
   save();renderList();showToast(result&&result.confirmed?'🚀 제출 확인 완료!':'📤 전송 요청 완료! 선생님 시트에서 확인해 주세요.');
 }
 
