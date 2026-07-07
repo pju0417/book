@@ -116,6 +116,8 @@ textarea{resize:vertical;min-height:240px;line-height:1.8;width:100%;}
 .btn-green:disabled{background:#9dbba6;cursor:not-allowed;}
 .btn-edit{background:#e8f0fe;color:#1a5fb4;border:1.5px solid #a0c0f0;}
 .btn-edit:hover{background:#1a5fb4;color:#fff;}
+.btn-recall{background:#fff4e6;color:#e67e22;border:1.5px solid #f5c48a;}
+.btn-recall:hover{background:#e67e22;color:#fff;}
 .btn-sm{padding:6px 12px;font-size:.78rem;}
 
 /* Log cards */
@@ -140,6 +142,7 @@ textarea{resize:vertical;min-height:240px;line-height:1.8;width:100%;}
 .badge-temp{background:#fff3cd;color:#856404;border:1px solid #ffd966;}
 .badge-ok{background:#d4edda;color:#155724;border:1px solid #a0d4a8;}
 .badge-sent{background:#cce5ff;color:#004085;border:1px solid #8ec5f5;}
+.badge-rejected{background:#fde8e8;color:#c0392b;border:1px solid #f5a0a0;}
 
 /* Expand button */
 .expand-btn{display:inline-flex;align-items:center;gap:5px;background:var(--bg);
@@ -1158,7 +1161,7 @@ function normalizeState(){
       review: normalizeText(log.review),
       savedAt: normalizeText(log.savedAt),
       sentAt: normalizeText(log.sentAt),
-      status: normalizeText(log.status) || 'temp',
+      status: ['temp','ok','sent','rejected'].includes(normalizeText(log.status)) ? normalizeText(log.status) : 'temp',
       teacherComment: normalizeText(log.teacherComment),
       teacherScore: log.teacherScore==='' || log.teacherScore==null ? null : Number(log.teacherScore),
       stars: Number(log.stars) || 0,
@@ -1426,9 +1429,8 @@ function submitLog(){
   if(!d.title){showToast('❌ 책 제목을 입력해주세요.');return;}
   if(getCharCount(d.content)< 150){showToast('❌ 150자 이상 작성해야 제출됩니다.');return;}
   d.status='ok';
-  // 모달 열기 전에 먼저 로컬 저장 (upsert) → doSubmit에서 같은 id로 찾아 교체, 절대 중복 추가 안 됨
-  upsertLog(d);save();
-  const isNew=!editingId;
+  // 편집 중이면 isNew=false → doSubmit이 unshift(중복 추가) 하지 않음
+  var isNew=!editingId;
   currentModalLog=d;modalIsNew=isNew;
   showSummaryModal(d,isNew);
 }
@@ -1444,6 +1446,8 @@ function renderList(){
     const stars='⭐'.repeat(log.stars||0);
     const badge=log.status==='sent'
       ?`<span class="badge badge-sent">📤 제출완료${log.teacherScore!=null?' · '+log.teacherScore+'점':''}</span>`
+      :log.status==='rejected'
+      ?`<span class="badge badge-rejected">🔴 반송됨${log.teacherComment?' — '+log.teacherComment:''}</span>`
       :log.status==='ok'
       ?`<span class="badge badge-ok">✅ 인정</span>`
       :`<span class="badge badge-temp">💾 임시저장</span>`;
@@ -1477,11 +1481,14 @@ function renderList(){
         <button class="btn btn-secondary btn-sm" onclick="openSummary('${log.id}')">🃏 요약카드</button>
         ${log.status==='ok'?`<button class="btn btn-green btn-sm" onclick="sendExisting('${log.id}')">🚀 제출</button>`:''}
         ${log.status==='sent'?`<button class="btn btn-secondary btn-sm" onclick="resubmitLog('${log.id}')">🔁 다시 제출</button>`:''}
+        ${log.status==='sent'?`<button class="btn btn-recall btn-sm" onclick="recallLog('${log.id}')">📥 회수</button>`:''}
+        ${log.status==='rejected'?`<button class="btn btn-green btn-sm" onclick="editAndResubmit('${log.id}')">✏️ 수정 후 제출</button>`:''}
         <button class="btn btn-danger btn-sm" onclick="deleteLog('${log.id}')">🗑️</button>
       </div>
       <div class="log-detail" id="detail_${log.id}">
         <div class="log-detail-content">${esc(log.content||'')}</div>
-        ${log.teacherComment?`<div class="teacher-comment">💬 선생님 코멘트: ${esc(log.teacherComment)}</div>`:''}
+        ${log.status==='rejected'?`<div class="teacher-comment" style="background:#fde8e8;border-left:4px solid #e74c3c;">🔴 반송 사유: ${esc(log.teacherComment||'사유 없음')}</div>`:
+          log.teacherComment?`<div class="teacher-comment">💬 선생님 코멘트: ${esc(log.teacherComment)}</div>`:''}
       </div>
     </div>`;
   }).join('');
@@ -1633,13 +1640,26 @@ async function syncScores(){
     const data=await jsonpFetch(state.scriptURL+'?mode=student&student='+encodeURIComponent(state.student));
     let added=0;
 
-    // 독서록 점수
+    // 독서록 점수 + 반송 감지
     const reviews=getArray(data,'reviews');
+    let hasRejected=false;
     reviews.forEach(item=>{
-      if(!item||!item.score||item.score==='')return;
-      const score=Number(item.score);if(isNaN(score)||score<=0)return;
+      if(!item)return;
       const itemId=String(item.id||item.logId||'');
       const itemTitle=item.title||item.logTitle||'';
+      const log=state.logs.find(l=>(itemId&&l.id===itemId)||(!itemId&&l.title===itemTitle));
+      // 반송 처리: 교사가 status='rejected'로 표시한 경우
+      if(item.status==='rejected'){
+        if(log&&log.status!=='rejected'){
+          log.status='rejected';
+          log.teacherComment=item.comment||'반송 사유가 입력되지 않았습니다.';
+          log.teacherScore=null;
+          added++;hasRejected=true;
+        }
+        return;
+      }
+      if(!item.score||item.score==='')return;
+      const score=Number(item.score);if(isNaN(score)||score<=0)return;
       const existIdx=state.scoreHistory.findIndex(h=>
         h.type==='book'&&((itemId&&h.id===itemId)||(!itemId&&h.logTitle===itemTitle))
       );
@@ -1650,9 +1670,9 @@ async function syncScores(){
         state.scoreHistory[existIdx]=Object.assign({},state.scoreHistory[existIdx],{score:score,comment:item.comment||'',date:item.date||new Date().toLocaleDateString('ko')});
         added++;
       }
-      const log=state.logs.find(l=>(itemId&&l.id===itemId)||(!itemId&&l.title===itemTitle));
       if(log){log.teacherScore=score;log.teacherComment=item.comment||'';log.status='sent';}
     });
+    if(hasRejected)setTimeout(()=>showToast('🔴 반송된 독서록이 있습니다! 📋 내 독서록 탭을 확인해 주세요.'),500);
 
     // 추가 점수
     getArray(data,'extras').forEach(item=>{
@@ -1728,12 +1748,43 @@ function resubmitLog(id){
   doSubmit(log,false,true);
 }
 
+// ── 회수 기능 ──
+async function recallLog(id){
+  const log=state.logs.find(l=>l.id===id);if(!log)return;
+  if(log.status!=='sent'){showToast('❌ 제출된 독서록만 회수할 수 있습니다.');return;}
+  if(!confirm('📥 이 독서록을 회수할까요?\n회수하면 선생님께 아직 채점 전인 경우에만 취소 처리됩니다.\n회수 후 수정해서 다시 제출할 수 있습니다.'))return;
+  // 로컬 상태 먼저 변경
+  log.status='ok';
+  log.sentAt=null;
+  save();renderList();renderStats();
+  showToast('📥 회수 완료! 수정 후 다시 제출할 수 있습니다.');
+  // 구글 시트에 회수 요청 (채점 전이어야 처리됨)
+  if(state.scriptURL&&state.student){
+    try{
+      await jsonpFetch(state.scriptURL
+        +'?mode=recallLog&student='+encodeURIComponent(state.student)
+        +'&id='+encodeURIComponent(log.id||'')
+        +'&title='+encodeURIComponent(log.title||''));
+    }catch(e){
+      showToast('⚠️ 로컬 회수는 완료, 시트 반영 실패 (선생님께 알려주세요)');
+    }
+  }
+}
+
+// ── 반송된 독서록 수정 후 제출 ──
+function editAndResubmit(id){
+  const log=state.logs.find(l=>l.id===id);if(!log)return;
+  if(!confirm('✏️ 이 독서록을 수정해서 다시 제출할까요?\n편집 화면으로 이동합니다.'))return;
+  // 반송 상태 → ok로 되돌리고 편집 모드로
+  log.status='ok';
+  save();
+  editLog(id);
+  showToast('✏️ 선생님 의견을 참고해 수정 후 다시 제출해 주세요!');
+}
+
 // ══ SUBMIT ══
 async function doSubmit(logData,isNew,isResubmit=false){
   if(!await ensureScriptReady(isResubmit?'다시 제출':'제출'))return;
-  // 제출 버튼 비활성화 — 중복 클릭 방지
-  const modalBtn=document.getElementById('btnModalSubmit');
-  if(modalBtn){modalBtn.disabled=true;modalBtn.textContent='📡 전송 중...';}
   const payload={id:logData.id,student:state.student||'이름없음',title:logData.title,author:logData.author,
     startDate:logData.startDate,endDate:logData.endDate,genre:logData.genre,
     content:logData.content,stars:logData.stars,review:logData.review,sentAt:new Date().toISOString(),resubmit:!!isResubmit};
@@ -1741,19 +1792,12 @@ async function doSubmit(logData,isNew,isResubmit=false){
   try{
     showToast('📡 전송 중...');
     result=await postToScript(payload);
-  }catch(e){
-    if(modalBtn){modalBtn.disabled=false;modalBtn.textContent='🚀 제출하기';}
-    showToast('❌ 전송 실패: '+e.message);return;
-  }
+  }catch(e){showToast('❌ 전송 실패: '+e.message);return;}
   // 전송 성공 후 로컬 상태 업데이트
-  // isNew 분기 없이 항상 upsert — 같은 id가 이미 있으면 교체, 없으면 앞에 추가
   logData.status='sent';logData.sentAt=new Date().toISOString();
   if(logData.image)imageCache[logData.id]=logData.image;
-  const existIdx=state.logs.findIndex(l=>l.id===logData.id);
-  if(existIdx!==-1){state.logs[existIdx]=logData;}
-  else{state.logs.unshift(logData);}
-  if(isNew)clearForm();
-  if(modalBtn){modalBtn.disabled=false;modalBtn.textContent='🚀 제출하기';}
+  if(isNew){state.logs.unshift(logData);clearForm();}
+  else{const idx=state.logs.findIndex(l=>l.id===logData.id);if(idx!==-1)state.logs[idx]=logData;}
   save();renderList();showToast(result&&result.confirmed?'🚀 제출 확인 완료!':'📤 전송 요청 완료! 선생님 시트에서 확인해 주세요.');
 }
 
